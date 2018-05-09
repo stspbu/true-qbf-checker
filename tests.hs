@@ -1,3 +1,5 @@
+module Main where
+
 import Exam
 import Test.HUnit
 import System.Exit
