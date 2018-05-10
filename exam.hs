@@ -33,9 +33,10 @@ instance Show Exp where
 	show (Exists x e) = "E" ++ x ++ show e
 
 -- start point
-eval exp = ancientMagic contOut exp
-	where ancientMagic f = runCont (eval' exp []) f
+eval :: Exp -> IO()
+eval exp = (runCont (eval' exp []) contOut) exp
 
+contOut :: Maybe [(String, Bool)] -> Exp -> IO()
 contOut (Just x) exp = do 
 		putStrLn "Your QBF is TQBF"
 		if x /= []
@@ -53,7 +54,7 @@ eval' (ForAll x e) vMap = do
 	rBranch <- eval' e ((x, True):vMap)
 
 	case (lBranch, rBranch) of
-		((Just nvMap), (Just _)) -> return $ Just (nvMap `remItem` x) -- x is any, dont have to include it
+		((Just nvMap), (Just _)) -> return $ Just nvMap
 		_ -> return Nothing
 
 
@@ -69,9 +70,6 @@ eval' e vMap = case calc e vMap of
 	ne@(Val True) -> return $ Just (vMap)
 	(Val False) -> return Nothing
 	e -> if getResult $ check [] [e] then return (Just (vMap)) else return Nothing
-
-remItem :: [(String, Bool)] -> String -> [(String, Bool)]
-remItem list item = filter(\(x, y) -> x /= item) list
 
 -- remove numbers
 calc :: Exp -> [(String, Bool)] -> Exp
