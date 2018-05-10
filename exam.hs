@@ -2,9 +2,10 @@ module Exam where
 
 import Prelude
 import Data.List (intersect)
+import Control.Monad.Cont
 
-data Exp = Val Int | Var String | Not Exp | And Exp Exp | Or Exp Exp | Impl Exp Exp | ForAll String Exp | Exists String Exp deriving (Eq)
-data Tree = Branch (Tree) (Tree) | LonelyBranch (Tree) | Leaf (Bool) deriving (Eq, Show)
+data Exp = Val Bool | Var String | Not Exp | And Exp Exp | Or Exp Exp | Impl Exp Exp | ForAll String Exp | Exists String Exp deriving (Eq)
+data Tree = Branch Tree Tree | LonelyBranch Tree | Leaf Bool deriving (Eq, Show)
 
 -- just for comfort
 (&) :: Exp -> Exp -> Exp
@@ -32,8 +33,10 @@ instance Show Exp where
 	show (Exists x e) = "E" ++ x ++ show e
 
 -- start point
-eval exp = case eval' exp [] of
-	(Just (e, x)) -> do 
+eval exp = ancientMagic contOut exp
+	where ancientMagic f = runCont (eval' exp []) f
+
+contOut (Just x) exp = do 
 		putStrLn "Your QBF is TQBF"
 		if x /= []
 		then do
@@ -42,36 +45,36 @@ eval exp = case eval' exp [] of
 		else 
 			putStrLn "Check it with any replacement"
 
-	_ -> putStrLn "Your QBF is not tautology"
+contOut _ exp = putStrLn "Your QBF is not tautology"
 
-eval' :: Exp -> [(String, Int)] -> Maybe (Exp, [(String, Int)])
-eval' (ForAll x e) vMap = 
-	case [lBranch, rBranch] of
-		[(Just (ne, nvMap)), (Just _)] -> Just (ne, nvMap `remItem` x) -- x is any, dont have to include it
-		_ -> Nothing
-	where
-		lBranch = eval' e ((x, 0):vMap)
-		rBranch = eval' e ((x, 1):vMap)
+eval' :: Exp -> [(String, Bool)] -> Cont a (Maybe [(String, Bool)])
+eval' (ForAll x e) vMap = do
+	lBranch <- eval' e ((x, False):vMap)
+	rBranch <- eval' e ((x, True):vMap)
 
-eval' (Exists x e) vMap = 
-	case [lBranch, rBranch] of
-		[a@(Just _), _] -> a 
-		[_, a@(Just _)] -> a
-		_ -> Nothing
-	where
-		lBranch = eval' e ((x, 0):vMap)
-		rBranch = eval' e ((x, 1):vMap)
+	case (lBranch, rBranch) of
+		((Just nvMap), (Just _)) -> return $ Just (nvMap `remItem` x) -- x is any, dont have to include it
+		_ -> return Nothing
+
+
+eval' (Exists x e) vMap = do
+	lBranch <- eval' e ((x, False):vMap)
+	rBranch <- eval' e ((x, True):vMap)
+	case (lBranch, rBranch) of
+		(a@(Just _), _) -> return a 
+		(_, a@(Just _)) -> return a
+		_ -> return Nothing
 
 eval' e vMap = case calc e vMap of 
-	ne@(Val 1) -> Just (ne, vMap)
-	(Val 0) -> Nothing
-	e -> if getResult $ check [] [e] then Just (e, vMap) else Nothing
+	ne@(Val True) -> return $ Just (vMap)
+	(Val False) -> return Nothing
+	e -> if getResult $ check [] [e] then return (Just (vMap)) else return Nothing
 
-remItem :: [(String, Int)] -> String -> [(String, Int)]
+remItem :: [(String, Bool)] -> String -> [(String, Bool)]
 remItem list item = filter(\(x, y) -> x /= item) list
 
 -- remove numbers
-calc :: Exp -> [(String, Int)] -> Exp
+calc :: Exp -> [(String, Bool)] -> Exp
 calc (Not e) m 		= combine $ Not (calc e m)
 calc (And e1 e2) m 	= combine $ (calc e1 m) & (calc e2 m)
 calc (Or e1 e2) m 	= combine $ (calc e1 m) ? (calc e2 m)
@@ -85,18 +88,18 @@ calc (Exists x e) m = calc e m -- result will be printed
 
 -- basis
 combine :: Exp -> Exp
-combine (Not (Val 1)) = Val 0
-combine (Not (Val 0)) = Val 1
+combine (Not (Val True)) = Val False
+combine (Not (Val False)) = Val True
 
-combine (Or (Val 1) _) = Val 1
-combine (Or _ (Val 1)) = Val 1
-combine (Or e (Val 0)) = e
-combine (Or (Val 0) e) = e
+combine (Or (Val True) _) = Val True
+combine (Or _ (Val True)) = Val True
+combine (Or e (Val False)) = e
+combine (Or (Val False) e) = e
 
-combine (And (Val 1) e) = e
-combine (And e (Val 1)) = e
-combine (And _ (Val 0)) = Val 0
-combine (And (Val 0) _) = Val 0
+combine (And (Val True) e) = e
+combine (And e (Val True)) = e
+combine (And _ (Val False)) = Val False
+combine (And (Val False) _) = Val False
 combine e = e
 
 -- исчисление высказываний
@@ -144,17 +147,21 @@ t1  = Exists "x" $ ForAll "y" $ ((Var "x") ? (Not $ Var "y")) & ((Not $ Var "x")
 t2  = ForAll "y" $ Exists "x" $ ((Var "x") ? (Not $ Var "y")) & ((Not $ Var "x") ? (Var "y"))									-- ok x=0
 t3  = (Var "x") ? (Not (Var "x"))																								-- ok any
 t4  = ForAll "x" $ Exists "u" $ (((Var "x") %> (Var "y")) ? (Var "z")) & (Var "x") ? (Var "u") ? (Var "g") 						-- ok u=1
-t5  = Val 1																														-- ok any
+t5  = Val True																														-- ok any
 t6  = ForAll "x" $ Var "x"																										-- f 
 t7  = Exists "x" $ Var "x"																										-- ok x=1
 t8  = ForAll "x" $ ForAll "u" $ Exists "g" $ (((Var "x") %> (Var "y")) ? (Var "z")) & (Var "x") ? (Var "u") ? (Var "g")	 		-- ok g=1
 t9  = Exists "u" $ (Var "x") ? (Not (Var "x")) ? (Var "u")																		-- ok any
 t10 = Exists "u" $ (Var "x") ? (Var "y") ? (Var "z")																			-- f
-t11 = ForAll "x" $ ForAll "u" $ (((Var "x") %> (Var "y")) ? (Var "z")) & (Var "x") ? (Var "u") ? (Val 1)						-- ok any
+t11 = ForAll "x" $ ForAll "u" $ (((Var "x") %> (Var "y")) ? (Var "z")) & (Var "x") ? (Var "u") ? (Val True)						-- ok any
 t12 = Exists "x" $ Exists "y" $ (Var "x") & (Var "y") & (Not $ Var "x")															-- f
-t13 = ForAll "y" $ ForAll "z" $ Exists "z" $ ForAll "x" $ (Var "x") & (Val 0)													-- f
-t14 = ForAll "y" $ ForAll "z" $ Exists "z" $ ForAll "x" $ (Val 1) ? (Val 0)														-- ok any
+t13 = ForAll "y" $ ForAll "z" $ Exists "z" $ ForAll "x" $ (Var "x") & (Val False)													-- f
+t14 = ForAll "y" $ ForAll "z" $ Exists "z" $ ForAll "x" $ (Val True) ? (Val False)														-- ok any
 t15 = ForAll "x" $ ForAll "y" $ Exists "z" $ ForAll "c" $ ForAll "d" $ ForAll "p" $ ((Var "x") %> (Var "y")) %> ((Var "y") %> (Var "z")) %> (((Var "c") %> (Var "d")) ? ((Var "y") %> (Var "p")))		-- ok z = 0
 t16 = ForAll "x" $ ForAll "y" $ ForAll "z" $ ForAll "c" $ ForAll "d" $ ForAll "p" $ ((Var "x") %> (Var "y")) %> ((Var "y") %> (Not $ Var "y")) %> (((Var "c") %> (Var "d")) ? ((Var "y") %> (Var "p")))	-- ok any
 t17 = ForAll "x" $ ForAll "y" $ ((Var "x") %> (Var "y")) %> (((Var "c") %> (Var "d")) ? ((Var "y") %> (Var "p")))				-- f
-t18 = Val 0 																													-- f
+t18 = Val False 					
+t19 = ForAll "x" $ ForAll "y" $ (Var "x") %> (Var "y") %> (Var "x")
+t20 = ForAll "a" $ ForAll "b" $ ForAll "c" $ ((Var "a") %> (Var "b") %> (Var "c")) %> ((Var "a") %> (Var "b")) %> (Var "a") %> (Var "c") 	
+t21 = ForAll "x" $ Exists "y" $ ((Var "x") %> (Var "y")) & ((Var "y") %> (Var "x"))
+t22 = Exists "y" $ ForAll "x" $ ((Var "x") %> (Var "y")) & ((Var "y") %> (Var "x"))																						-- f
